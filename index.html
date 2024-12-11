@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" href="/favicon.ico" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vite App</title>
+</head>
+
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
+  <button id="googleLoginBtn" class="btn-primary">Login with Google</button>
+  <div id="userInfo" style="display: none;">
+    <!-- <img id="userImage" style="display: none;" /> -->
+    <p id="userEmail"></p>
+    <p id="tokenExpiry"></p>
+    <button id="logoutBtn">Logout</button>
+</body>
+
+
+<script>
+  // OAuth Configuration
+  const clientId = '518169518205-kg9bua2hjodt4ksd8ard51vm05sfqa63.apps.googleusercontent.com'
+  const redirectUri = 'http://localhost:5173'
+  const oauth_endpoint = 'https://accounts.google.com/o/oauth2/v2/auth'
+  const scope = 'https://www.googleapis.com/auth/userinfo.email'
+
+  // JWT
+  class AuthUtils {
+    static generateState() {
+      const array = new Uint32Array(4)
+      crypto.getRandomValues(array)
+      return Array.from(array, (x) => x.toString(16)).join('-')
+    }
+
+    static createJWT(userInfo) {
+      const header = {
+        alg: 'HS256',
+        typ: 'JWT'
+      }
+
+      const payload = {
+        sub: userInfo.sub,
+        email: userInfo.email,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 60
+      }
+
+      const base64Header = btoa(JSON.stringify(header))
+      const base64Payload = btoa(JSON.stringify(payload)).split('=')[0]
+
+      const array = new Uint8Array(32)
+      window.crypto.getRandomValues(array)
+      const base64Key = btoa(String.fromCharCode(...array));
+      const hexString = base64Key.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+      return `${base64Header}.${base64Payload}.${hexString}`
+    }
+
+    static getTokenExpiration(expiresIn) {
+      const expiryDate = new Date(Date.now() + expiresIn * 1000)
+      return expiryDate.toLocaleString()
+    }
+  }
+
+  // Login
+  document.getElementById('googleLoginBtn').addEventListener('click', () => {
+    const state = AuthUtils.generateState()
+
+    localStorage.setItem('oauth_state', state)
+
+    const authUrl =
+      `${oauth_endpoint}?` +
+      new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'token',
+        scope: scope,
+        state: state,
+        prompt: 'consent'
+      })
+
+    window.location.href = authUrl
+  })
+
+  // Handle OAuth Callback
+  function handleOAuthCallback() {
+    const hash = window.location.hash.substring(1)
+    const params = new URLSearchParams(hash)
+
+    // Validate state to prevent CSRF
+    const returnedState = params.get('state')
+    const storedState = localStorage.getItem('oauth_state')
+
+    if (returnedState !== storedState) {
+      console.error('State mismatch. Potential CSRF attack.')
+      return
+    }
+
+    const accessToken = params.get('access_token')
+    const expiresIn = parseInt(params.get('expires_in'), 10)
+
+    if (accessToken) {
+      fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      })
+        .then((response) => response.json())
+        .then((userInfo) => {
+          // Create JWT
+          const jwt = AuthUtils.createJWT(userInfo)
+          window.user_jwt = jwt
+          console.log('JWT:', jwt)
+          // Update UI
+          document.getElementById('userEmail').textContent = userInfo.email
+
+          // Show token expiration
+          document.getElementById('tokenExpiry').textContent =
+            `Token expires: ${AuthUtils.getTokenExpiration(expiresIn)}`
+
+          // Hide login, show user info
+          document.getElementById('googleLoginBtn').style.display = 'none'
+          document.getElementById('userInfo').style.display = 'block'
+
+
+          localStorage.setItem('user_jwt', jwt)
+        })
+        .catch((error) => {
+          console.error('Error fetching user info:', error)
+        })
+    }
+  }
+
+  // Logout Event Listener
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    // Clear session storage
+    localStorage.removeItem('user_jwt')
+    //localStorage.removeItem('access_token')
+    localStorage.removeItem('oauth_state')
+
+    // Reset UI
+    document.getElementById('userEmail').textContent = ''
+    document.getElementById('tokenExpiry').textContent = ''
+    document.getElementById('userImage').src = ''
+    document.getElementById('googleLoginBtn').style.display = 'block'
+    document.getElementById('userInfo').style.display = 'none'
+  })
+
+  // Check for OAuth callback on page load
+  if (window.location.hash.includes('access_token')) {
+    handleOAuthCallback()
+  }
+
+  //checkTokenExpiration();
+</script>
+
+</html>
